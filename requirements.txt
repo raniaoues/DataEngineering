@@ -1,0 +1,5 @@
+requests
+pandas
+python-dotenv
+kafka-python
+minio

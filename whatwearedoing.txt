@@ -1,0 +1,73 @@
+- dossier ingestion fih ili files ili bsh nestaamlouhom bsh nfetchiw e data lkol 
+- .env fih e secret keys ili malezmch nshariwhom 
+- requirements.txt : fih libreries ili bsh nesthakouhom fil projet lkol () pour le moment fih :
+        requests: makes HTTP calls to the NASA API (like a browser, but in Python)
+        pandas: loads and manipulates the CSV data as a table (DataFrame)
+        python-dotenv: reads your secret key from the .env file safely
+
+
+First Step : amalna lfile nasa_firms_client.py testina fiha enou lAPI_key mteena ymchi jawou behi w amalna fonction hattina fiha data ili jebneha fi table essmou df 
+Second Step : Bsh nstreamiw e data b Apache Kafka 
+    behi ykoul lkayel ahna aleh bsh nekhdmou b kafka ?
+    -l but mtaa l pipline mteena ina 1)njiwbou data n 2)storiwha , 3)naamloulha des transformations ,4) naamlou dashboard b data hedhi 
+    fil first step yasidek ya ben sidek konaa juste njibou e data w mnaamlou biha chy tw si KAFKA bsh ykhdem kil message Broker ana producer script bsh yaatih e data w houwa ka topic bsh ybaath lel consumer (storage,transformation, alerts.... )
+    NASA API → your script → Kafka → (storage, transformation, alerts...)
+            (Producer)      (Topic)      (Consumers)
+    Think of Kafka like a postal system:
+        The Producer writes letters (fire data) and drops them in a mailbox (Topic)
+        The Consumer picks up those letters whenever it's ready
+        They never need to talk to each other directly
+    Maghir ami kafka ken e storge system mtei crashes nakhser e data lkol ,maa ami kafka les messages mahtoutin fi file d'attente hata lin tsir l consommation mtehom 
+    ATTENTION : Kafka requires a companion service called Zookeeper to manage it (ami kafka maykhdem ken b ami zookeeper hedha how l manger mteou)
+        PRODUCER                          CONSUMER
+        ────────                          ────────
+        Fetches NASA data (Step 1)        Listens to Kafka topic
+        Converts rows → individual dicts  Receives one message at a time
+        Serializes dict → bytes           Deserializes bytes → dict
+        Sends to 'fires_raw' topic        Reads from 'fires_raw' topic
+        Runs every 1 hour                 Runs forever, always listening
+        Doesn't know who reads the data   Doesn't know who sent the data
+
+        They are completely independent — that's the whole point of Kafka.
+        The producer can crash and restart, the consumer won't lose a single message. 💪
+Third Step: Saving Data to MinIO Storage
+        Right now our consumer reads fire data from Kafka and just prints it. Once printed, that data is gone forever.
+        We need somewhere to store it permanently.
+        That's where MinIO comes in:
+                MinIO is like your own personal Amazon S3 (est un service de stockage d'objets cloud hautement évolutif, sécurisé et durable) running locally on your machine. 
+                It stores files (called objects) in buckets — exactly like folders.
+                Without MinIO:
+                NASA → Kafka → Consumer → print() → ❌ data lost
+
+                With MinIO:
+                NASA → Kafka → Consumer → MinIO → ✅ data saved as CSV files
+        Why not just save to a regular folder?
+        Because in real Data Engineering, storage needs to be:
+        Scalable : handle millions of files
+        Compatible with cloud : MinIO uses the same API as Amazon S3, so switching to real cloud later requires zero code changes
+        Accessible by multiple services : Airflow, DuckDB, and Streamlit can all read from it simultaneously
+        - Bsh naamlou file minio_client.py ykoul lkayel aleeh? : ami minio bsh nestaamlou fi barcha blyess tout au long l projet 
+        bsh manokodouch kol mara nektbou fi nafss lcode nektbouh mara barka w naaytoulou wkat nesthakouh (DRY principle (dont repeat yourself))
+        - Bsh naamlou update lel kafka_consumer ken juste yaamel print lel data tw bsh iwali y saviha fi Minio kol ma tjih 
+                
+Fourth Step: Orchestrating with Apache Airflow : ahna tw n runniw manualement les programmes kol manhebou nkhdmou l pipline hedhi haja mtsednaeech fil production
+        ami Apache Airflow yaamela scheduling w Orchestrating mtaa les taches it runs your scripts automatically at the right time, in the right order, 
+        and alerts you if something fails. 
+
+        Without Airflow:
+        You manually run scripts → you forget → data is missing → pipeline breaks ❌
+
+        With Airflow:
+        Airflow runs everything automatically → on schedule → in order → retries on failure ✅
+
+        Concept         What it means                                           Real analogy
+        DAG             Directed Acyclic Graph — a pipeline definition          A recipe with ordered steps
+        Task            One single step inside a DAG                            One step in the recipe
+        Operator        The type of task (Python, Bash, SQL...)                 The cooking method (bake, fry...)
+        Schedule        When the DAG runs (cron expression)                     "Every day at 8am"
+        dependency      Task B waits for Task A"                                Add eggs AFTER mixing flour"
+
+        ├── dags/                          ← NEW: Airflow reads DAGs from here
+        │   ├── firms_ingestion_dag.py     ← NEW: hourly fire data ingestion
+        │   ├── enrichment_dag.py          ← NEW: daily weather + forest enrichment
+        │   └── reporting_dag.py           ← NEW: daily aggregation + alerts
