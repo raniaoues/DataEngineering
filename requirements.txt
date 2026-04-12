@@ -3,3 +3,10 @@ pandas
 python-dotenv
 kafka-python
 minio
+duckdb==0.10.3
+sqlalchemy
+psycopg2-binary
+fiona==1.9.5
+geopandas==0.13.2
+shapely==2.0.1
+pyproj==3.5.0

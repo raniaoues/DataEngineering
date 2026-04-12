@@ -69,5 +69,5 @@ Fourth Step: Orchestrating with Apache Airflow : ahna tw n runniw manualement le
 
         ├── dags/                          ← NEW: Airflow reads DAGs from here
         │   ├── firms_ingestion_dag.py     ← NEW: hourly fire data ingestion
-        │   ├── enrichment_dag.py          ← NEW: daily weather + forest enrichment
+        │   ├── enrichment_dag.py          ← NEW: daily weather + forest enrichment // hne bsh nestaamlou les sources lokhrin mtaa e data an tarik l api mteehom 
         │   └── reporting_dag.py           ← NEW: daily aggregation + alerts
