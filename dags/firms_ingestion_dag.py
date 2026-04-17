@@ -96,8 +96,43 @@ with DAG(
         provide_context=True,
     )
 
+    def clean_data_task():
+        from nasa_firms_client import fetch_fire_data
+        import pandas as pd
+
+        df = fetch_fire_data()
+
+        before = len(df)
+        
+        # 1. Drop duplicates
+        df = df.drop_duplicates(subset=['latitude', 'longitude', 'acq_date', 'acq_time'])
+        
+        # 2. Drop rows missing critical fields
+        df = df.dropna(subset=['latitude', 'longitude', 'frp'])
+        
+        # 3. Remove invalid FRP
+        df = df[df['frp'] >= 0]
+        
+        # 4. Normalize confidence to numeric
+        confidence_map = {'l': 0, 'n': 1, 'h': 2}
+        if df['confidence'].dtype == object:
+            df['confidence'] = df['confidence'].map(confidence_map)
+        
+        # 5. Cast types
+        df['latitude'] = df['latitude'].astype(float)
+        df['longitude'] = df['longitude'].astype(float)
+        df['frp'] = df['frp'].astype(float)
+
+        after = len(df)
+        print(f"✅ Cleaning done: {before} → {after} rows ({before - after} removed)")
+
+    clean_task = PythonOperator(
+        task_id='clean_data',
+        python_callable=clean_data_task,
+    )
+
     # -------------------------------------------------------
-    # TASK 3: Upload validated data to MinIO
+    # TASK 4: Upload validated data to MinIO
     # -------------------------------------------------------
     def upload_minio_task(**context):
         import pandas as pd
@@ -123,4 +158,4 @@ with DAG(
     )
 
     # Task dependencies — order of execution
-    fetch_task >> validate_task >> upload_task
+    fetch_task >> validate_task >> clean_task >> upload_task

@@ -125,20 +125,19 @@ with DAG(
     # -------------------------------------------------------
     def fetch_gfw_task(**context):
         import pandas as pd
-        from gfw_client import get_forest_coverage
+        from gfw_client import get_forest_coverage  # ← this will now resolve correctly
 
         ti = context['ti']
         enriched_json = ti.xcom_pull(task_ids='fetch_meteo')
-
         if enriched_json is None:
             raise ValueError("❌ No data received from fetch_meteo task.")
 
         enriched_df = pd.read_json(enriched_json)
-
         enriched_df['forest_pct'] = None
         enriched_df['primary_forest'] = None
         enriched_df['protected_area'] = None
 
+        failed = 0
         for idx, row in enriched_df.iterrows():
             try:
                 forest_data = get_forest_coverage(
@@ -150,11 +149,16 @@ with DAG(
                 enriched_df.at[idx, 'primary_forest'] = forest_data['primary_forest']
                 enriched_df.at[idx, 'protected_area'] = forest_data['protected_area']
             except Exception as e:
+                failed += 1
                 print(f"⚠️ GFW enrichment failed for row {idx}: {e}")
 
-        print(f"✅ GFW enrichment complete: {len(enriched_df)} rows processed")
-        return enriched_df.to_json()
+        print(f"✅ GFW enrichment complete: {len(enriched_df) - failed} rows enriched, {failed} failed")
 
+        # ✅ Fail the task if EVERYTHING failed — means there's a systemic problem
+        if failed == len(enriched_df):
+            raise RuntimeError("❌ GFW enrichment failed for ALL rows — check API key or function name")
+
+        return enriched_df.to_json()
     fetch_gfw = PythonOperator(
         task_id='fetch_gfw',
         python_callable=fetch_gfw_task,

@@ -9,7 +9,7 @@ API_KEY=os.getenv("FIRMS_API_KEY") #retrieves your key by name. Your key never a
 BBOX="-180,-90,180,90" #BBOX = Bounding Box — it defines the geographic zone to query. Format is: min_longitude, min_latitude, max_longitude, max_latitude-180,-90,180,90 = the entire planet 🌍 Later you can narrow it to a specific country, e.g. Tunisia: 7.5,30.2,11.6,37.5
 FIRMS_URL = (
     f"https://firms.modaps.eosdis.nasa.gov/api/area/csv/"
-    f"{API_KEY}/VIIRS_SNPP_NRT/{BBOX}/1"
+    f"{API_KEY}/VIIRS_SNPP_NRT/{BBOX}/5"
 ) # hedha nbuildiw bih l api 
 
 def fetch_fire_data():
