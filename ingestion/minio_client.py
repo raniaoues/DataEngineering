@@ -1,80 +1,50 @@
-from minio import Minio
-from minio.error import S3Error
+from supabase import create_client
 import os
 import io
 import streamlit as st
 
-def get_minio_client():
-    # Sur Streamlit Cloud → utilise st.secrets
-    # En local → utilise les variables d'environnement comme fallback
+def get_supabase_client():
     try:
-        endpoint   = st.secrets["MINIO_ENDPOINT"]
-        access_key = st.secrets["MINIO_ACCESS_KEY"]
-        secret_key = st.secrets["MINIO_SECRET_KEY"]
-        secure     = st.secrets.get("MINIO_SECURE", False)
+        url = st.secrets["SUPABASE_URL"]
+        key = st.secrets["SUPABASE_KEY"]
     except Exception:
-        endpoint   = os.getenv("MINIO_ENDPOINT")
-        access_key = os.getenv("MINIO_ACCESS_KEY")
-        secret_key = os.getenv("MINIO_SECRET_KEY")
-        secure     = False
+        url = os.getenv("SUPABASE_URL")
+        key = os.getenv("SUPABASE_KEY")
+    return create_client(url, key)
 
-    client = Minio(
-        endpoint,
-        access_key=access_key,
-        secret_key=secret_key,
-        secure=secure
-    )
-    return client
-
-def ensure_bucket_exits(client,bucket_name):
-    """
-    Creates the bucket if it doesn't already exist.
-
-    WHY this function?
-    If you try to upload a file to a bucket that doesn't exist,
-    MinIO throws an error and your data is lost.
-    This function makes sure the bucket always exists BEFORE uploading.
-    Think of it like: mkdir -p (create folder if not exists)
-    """
-
-    if not client.bucket_exists(bucket_name):
-        client.make_bucket(bucket_name)
-        print(f"✅ Bucket '{bucket_name}' created")
-    else:
-        print(f"📦 Bucket '{bucket_name}' already exists")
+def ensure_bucket_exits(client, bucket_name):
+    # Supabase crée le bucket via le dashboard, pas besoin de le créer en code
+    print(f"📦 Using bucket '{bucket_name}'")
 
 def upload_dataframe(df, object_name):
-    """
-    Saves a Pandas DataFrame as a CSV file directly into MinIO.
+    try:
+        bucket_name = st.secrets["MINIO_BUCKET"]
+    except Exception:
+        bucket_name = os.getenv("MINIO_BUCKET", "fires-raw")
 
-    Parameters:
-        df          → the DataFrame to save (our fire data)
-        object_name → the filename inside MinIO (like a path)
-                      example: 'viirs/2024/01/15/fires_14h00.csv'
-    """
-    bucket_name= os.getenv("MINIO_BUCKET")
-    client= get_minio_client()
-    ensure_bucket_exits(client,bucket_name)
+    client = get_supabase_client()
 
-    csv_buffer=io.BytesIO()
-     # WHY BytesIO?
-    # Normally pd.to_csv() saves to a file on disk.
-    # BytesIO creates a "virtual file" in RAM — no disk needed.
-    # MinIO's upload function expects a file-like object, so this works perfectly.
-
+    csv_buffer = io.BytesIO()
     df.to_csv(csv_buffer, index=False)
-    csv_buffer.seek(0) #bsh nerjouu l cursor l awel buffer khter mbaad makteb kaad fil lekhr donc ken nbaathouh akeka bsh iji file fergh
-    file_size=csv_buffer.getbuffer().nbytes
-    # WHY get file size?
-    # MinIO's put_object() REQUIRES knowing the file size in advance
-    # to properly handle the upload stream
+    csv_buffer.seek(0)
+    file_bytes = csv_buffer.getvalue()
 
-    client.put_object(
-        bucket_name,
-        object_name,
-        csv_buffer,
-        file_size,
-        content_type="text/csv"
+    client.storage.from_(bucket_name).upload(
+        path=object_name,
+        file=file_bytes,
+        file_options={"content-type": "text/csv", "upsert": "true"}
     )
-    print(f" Uploaded '{object_name}' to bucket '{bucket_name}' "
-          f"({file_size} bytes)")
+    print(f"✅ Uploaded '{object_name}' to bucket '{bucket_name}'")
+
+def download_dataframe(object_name):
+    """Remplace la lecture depuis MinIO"""
+    try:
+        bucket_name = st.secrets["MINIO_BUCKET"]
+    except Exception:
+        bucket_name = os.getenv("MINIO_BUCKET", "fires-raw")
+
+    client = get_supabase_client()
+    response = client.storage.from_(bucket_name).download(object_name)
+    
+    import pandas as pd
+    return pd.read_csv(io.BytesIO(response))
