@@ -484,7 +484,7 @@ def load_raw(days: int = 7) -> pd.DataFrame:
         return pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
     except Exception as e:
         st.error(f"Erreur raw: {e}")
-        return pd.DataFrame()x
+        return pd.DataFrame()
 
 @st.cache_data(ttl=300, show_spinner=False)
 def load_gold():
