@@ -5,7 +5,7 @@ plotly
 requests
 python-dotenv
 kafka-python
-minio
+supabase
 duckdb
 sqlalchemy
 psycopg2-binary
