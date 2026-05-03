@@ -430,13 +430,17 @@ def display_alert_banners(new_alerts):
 @st.cache_resource(show_spinner=False)
 def _minio():
     try:
-        from minio import Minio
-        c = Minio(
-            os.getenv("MINIO_ENDPOINT", "localhost:9000"),
-            access_key=os.getenv("MINIO_ACCESS_KEY", "minioadmin"),
-            secret_key=os.getenv("MINIO_SECRET_KEY", "minioadmin123"),
-            secure=False,
-        )
+        from supabase import create_client
+        url = st.secrets.get("SUPABASE_URL", os.getenv("SUPABASE_URL"))
+        key = st.secrets.get("SUPABASE_KEY", os.getenv("SUPABASE_KEY"))
+        if not url or not key:
+            st.error("❌ SUPABASE_URL ou SUPABASE_KEY manquant dans les secrets")
+            return None, False
+        client = create_client(url, key)
+        return client, True
+    except Exception as e:
+        st.error(f"❌ Supabase: {str(e)}")
+        return None, False
         c.list_buckets()
         return c, True
     except Exception as e:
@@ -449,30 +453,16 @@ def load_enriched(days: int = 7) -> pd.DataFrame:
     if not ok:
         return pd.DataFrame()
     try:
-        bucket = os.getenv("MINIO_BUCKET", "fires-raw")
-        cutoff = datetime.utcnow() - timedelta(days=days)
+        bucket = st.secrets.get("MINIO_BUCKET", os.getenv("MINIO_BUCKET", "fires-raw"))
+        response = client.storage.from_(bucket).list("enriched")
         frames = []
-        objects = list(client.list_objects(bucket, prefix="enriched/", recursive=True))
-        if not objects:
-            return pd.DataFrame()
-        for obj in objects:
-            parts = obj.object_name.split("/")
-            if len(parts) >= 4:
-                try:
-                    d = datetime.strptime(f"{parts[1]}-{parts[2]}-{parts[3]}", "%Y-%m-%d")
-                    if d < cutoff:
-                        continue
-                except:
-                    pass
-            response = client.get_object(bucket, obj.object_name)
-            data = response.read()
+        cutoff = datetime.utcnow() - timedelta(days=days)
+        for obj in response:
+            name = obj["name"]
+            data = client.storage.from_(bucket).download(f"enriched/{name}")
             df_temp = pd.read_csv(io.BytesIO(data))
             frames.append(df_temp)
-            response.close()
-            response.release_conn()
-        if frames:
-            return pd.concat(frames, ignore_index=True)
-        return pd.DataFrame()
+        return pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
     except Exception as e:
         st.error(f"Erreur enriched: {e}")
         return pd.DataFrame()
@@ -483,33 +473,18 @@ def load_raw(days: int = 7) -> pd.DataFrame:
     if not ok:
         return pd.DataFrame()
     try:
-        bucket = os.getenv("MINIO_BUCKET", "fires-raw")
-        cutoff = datetime.utcnow() - timedelta(days=days)
+        bucket = st.secrets.get("MINIO_BUCKET", os.getenv("MINIO_BUCKET", "fires-raw"))
+        response = client.storage.from_(bucket).list("viirs")
         frames = []
-        objects = list(client.list_objects(bucket, prefix="viirs/", recursive=True))
-        if not objects:
-            return pd.DataFrame()
-        for obj in objects:
-            parts = obj.object_name.split("/")
-            if len(parts) >= 4:
-                try:
-                    d = datetime.strptime(f"{parts[1]}-{parts[2]}-{parts[3]}", "%Y-%m-%d")
-                    if d < cutoff:
-                        continue
-                except:
-                    pass
-            response = client.get_object(bucket, obj.object_name)
-            data = response.read()
+        for obj in response:
+            name = obj["name"]
+            data = client.storage.from_(bucket).download(f"viirs/{name}")
             df_temp = pd.read_csv(io.BytesIO(data))
             frames.append(df_temp)
-            response.close()
-            response.release_conn()
-        if frames:
-            return pd.concat(frames, ignore_index=True)
-        return pd.DataFrame()
+        return pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
     except Exception as e:
         st.error(f"Erreur raw: {e}")
-        return pd.DataFrame()
+        return pd.DataFrame()x
 
 @st.cache_data(ttl=300, show_spinner=False)
 def load_gold():
@@ -527,14 +502,15 @@ def get_minio_stats() -> dict:
     if not ok:
         return {"raw": 0, "enriched": 0, "connected": False, "last_ingestion": None}
     try:
-        bucket = os.getenv("MINIO_BUCKET", "fires-raw")
-        raw_objs = list(client.list_objects(bucket, prefix="viirs/", recursive=True))
-        enr_objs = list(client.list_objects(bucket, prefix="enriched/", recursive=True))
-        last_time = None
-        for obj in raw_objs + enr_objs:
-            if last_time is None or obj.last_modified > last_time:
-                last_time = obj.last_modified
-        return {"raw": len(raw_objs), "enriched": len(enr_objs), "connected": True, "last_ingestion": last_time}
+        bucket = st.secrets.get("MINIO_BUCKET", "fires-raw")
+        raw_objs = client.storage.from_(bucket).list("viirs")
+        enr_objs = client.storage.from_(bucket).list("enriched")
+        return {
+            "raw": len(raw_objs),
+            "enriched": len(enr_objs),
+            "connected": True,
+            "last_ingestion": None
+        }
     except:
         return {"raw": 0, "enriched": 0, "connected": False, "last_ingestion": None}
 
