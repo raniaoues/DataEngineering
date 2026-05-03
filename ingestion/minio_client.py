@@ -1,24 +1,28 @@
-from minio import Minio 
+from minio import Minio
 from minio.error import S3Error
-import os 
+import os
 import io
-from dotenv import load_dotenv
-
-load_dotenv()
+import streamlit as st
 
 def get_minio_client():
-    """
-     fonction nasen3ou beha MinIO client 
-     naaytoulha kol ma bsh nesthakou n interactiw maa storage  
-    """
+    # Sur Streamlit Cloud → utilise st.secrets
+    # En local → utilise les variables d'environnement comme fallback
+    try:
+        endpoint   = st.secrets["MINIO_ENDPOINT"]
+        access_key = st.secrets["MINIO_ACCESS_KEY"]
+        secret_key = st.secrets["MINIO_SECRET_KEY"]
+        secure     = st.secrets.get("MINIO_SECURE", False)
+    except Exception:
+        endpoint   = os.getenv("MINIO_ENDPOINT")
+        access_key = os.getenv("MINIO_ACCESS_KEY")
+        secret_key = os.getenv("MINIO_SECRET_KEY")
+        secure     = False
+
     client = Minio(
-        os.getenv("MINIO_ENDPOINT"),#address mtee l minio server mteena 
-        access_key=os.getenv("MINIO_ACCESS_KEY"),#username lel authentification 
-        secret_key=os.getenv("MINIO_SECRET_KEY"),#password lel authentification 
-        secure=False
-        # secure=True would require HTTPS (SSL certificate)
-        # We're running locally so HTTP is fine
-        # In production on AWS/GCP, always use secure=True
+        endpoint,
+        access_key=access_key,
+        secret_key=secret_key,
+        secure=secure
     )
     return client
 
