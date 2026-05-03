@@ -737,7 +737,7 @@ def main():
     st.markdown(f"""
     <div class='fw-top'>
       <div>
-        <div class='fw-logo'>Fire<b>Watch</b> Intelligence</div>
+        <div class='fw-logo'>Fire<b>Watch</b> </div>
         <div class='fw-sub'>NASA FIRMS VIIRS · Kafka → MinIO → Airflow → DuckDB → PostgreSQL</div>
       </div>
       <div class='fw-live'>
@@ -873,10 +873,19 @@ def main():
                     ))
                 if show_zones:
                     for _, r in map_df.head(200).iterrows():
+
+                        if pd.isna(r["zone_radius_km"]) or r["zone_radius_km"] <= 0:
+                            continue
+
                         fig.add_trace(go.Scattermapbox(
-                            lat=[r["latitude"]], lon=[r["longitude"]],
+                            lat=[r["latitude"]],
+                            lon=[r["longitude"]],
                             mode="markers",
-                            marker=dict(size=r["zone_radius_km"]*2, color="orange", opacity=0.2),
+                            marker=dict(
+                                size=r["zone_radius_km"] * 2,
+                                color="orange",
+                                opacity=0.2
+                            ),
                             showlegend=False
                         ))
                 fig.update_layout(
