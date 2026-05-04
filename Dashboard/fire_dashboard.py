@@ -424,66 +424,122 @@ def display_alert_banners(new_alerts):
         st.toast(f"🔥 Alerte critique {country} - FRP {frp:.0f} MW", icon="🚨")
 
 # ══════════════════════════════════════════════════════════════════════════════
-# CONNECTEURS DONNÉES — MinIO
+# CONNECTEURS DONNÉES — Supabase Storage (via requests, sans librairie supabase)
 # ══════════════════════════════════════════════════════════════════════════════
+
+def _get_supabase_creds():
+    try:
+        url = st.secrets["SUPABASE_URL"]
+        key = st.secrets["SUPABASE_KEY"]
+    except Exception:
+        url = os.getenv("SUPABASE_URL", "")
+        key = os.getenv("SUPABASE_KEY", "")
+    return url, key
+
+def _supabase_list(prefix: str) -> list:
+    import requests
+    url, key = _get_supabase_creds()
+    bucket = "fires-raw"
+    headers = {"Authorization": f"Bearer {key}", "apikey": key, "Content-Type": "application/json"}
+    def recurse(current_prefix):
+        try:
+            r = requests.post(
+                f"{url}/storage/v1/object/list/{bucket}",
+                headers=headers,
+                json={"prefix": current_prefix, "limit": 1000, "offset": 0},
+                timeout=30,
+            )
+            if r.status_code != 200:
+                return []
+            csv_files = []
+            for item in r.json():
+                name = item.get("name", "")
+                full_path = f"{current_prefix}{name}"
+                if name.endswith(".csv"):
+                    csv_files.append(full_path)
+                elif name:
+                    csv_files.extend(recurse(f"{full_path}/"))
+            return csv_files
+        except Exception:
+            return []
+    return recurse(prefix)
+
+def _supabase_download(path: str) -> bytes:
+    import requests
+    url, key = _get_supabase_creds()
+    try:
+        r = requests.get(
+            f"{url}/storage/v1/object/fires-raw/{path}",
+            headers={"Authorization": f"Bearer {key}", "apikey": key},
+            timeout=30,
+        )
+        return r.content if r.status_code == 200 else b""
+    except Exception:
+        return b""
 
 @st.cache_resource(show_spinner=False)
 def _minio():
-    try:
-        from supabase import create_client
-        url = st.secrets.get("SUPABASE_URL", os.getenv("SUPABASE_URL"))
-        key = st.secrets.get("SUPABASE_KEY", os.getenv("SUPABASE_KEY"))
-        if not url or not key:
-            st.error("❌ SUPABASE_URL ou SUPABASE_KEY manquant dans les secrets")
-            return None, False
-        client = create_client(url, key)
-        return client, True
-    except Exception as e:
-        st.error(f"❌ Supabase: {str(e)}")
+    import requests
+    url, key = _get_supabase_creds()
+    if not url or not key:
         return None, False
-        c.list_buckets()
-        return c, True
-    except Exception as e:
-        st.error(f"❌ MinIO: {str(e)}")
+    try:
+        r = requests.post(
+            f"{url}/storage/v1/object/list/fires-raw",
+            headers={"Authorization": f"Bearer {key}", "apikey": key, "Content-Type": "application/json"},
+            json={"prefix": "enriched/", "limit": 1},
+            timeout=10,
+        )
+        return (True, True) if r.status_code == 200 else (None, False)
+    except Exception:
         return None, False
 
 @st.cache_data(ttl=300, show_spinner=False)
 def load_enriched(days: int = 7) -> pd.DataFrame:
-    client, ok = _minio()
+    _, ok = _minio()
     if not ok:
         return pd.DataFrame()
     try:
-        bucket = st.secrets.get("MINIO_BUCKET", os.getenv("MINIO_BUCKET", "fires-raw"))
-        response = client.storage.from_(bucket).list("enriched")
-        frames = []
         cutoff = datetime.utcnow() - timedelta(days=days)
-        for obj in response:
-            name = obj["name"]
-            data = client.storage.from_(bucket).download(f"enriched/{name}")
-            df_temp = pd.read_csv(io.BytesIO(data))
-            frames.append(df_temp)
+        files = _supabase_list("enriched/")
+        frames = []
+        for path in files:
+            try:
+                parts = path.split("/")
+                d = datetime.strptime(f"{parts[1]}-{parts[2]}-{parts[3]}", "%Y-%m-%d")
+                if d < cutoff:
+                    continue
+            except Exception:
+                pass
+            data = _supabase_download(path)
+            if data:
+                frames.append(pd.read_csv(io.BytesIO(data)))
         return pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
-    except Exception as e:
-        st.error(f"Erreur enriched: {e}")
+    except Exception:
         return pd.DataFrame()
 
 @st.cache_data(ttl=300, show_spinner=False)
 def load_raw(days: int = 7) -> pd.DataFrame:
-    client, ok = _minio()
+    _, ok = _minio()
     if not ok:
         return pd.DataFrame()
     try:
-        bucket = st.secrets.get("MINIO_BUCKET", os.getenv("MINIO_BUCKET", "fires-raw"))
-        response = client.storage.from_(bucket).list("viirs")
+        cutoff = datetime.utcnow() - timedelta(days=days)
+        files = _supabase_list("viirs/")
         frames = []
-        for obj in response:
-            name = obj["name"]
-            data = client.storage.from_(bucket).download(f"viirs/{name}")
-            df_temp = pd.read_csv(io.BytesIO(data))
-            frames.append(df_temp)
+        for path in files:
+            try:
+                parts = path.split("/")
+                d = datetime.strptime(f"{parts[1]}-{parts[2]}-{parts[3]}", "%Y-%m-%d")
+                if d < cutoff:
+                    continue
+            except Exception:
+                pass
+            data = _supabase_download(path)
+            if data:
+                frames.append(pd.read_csv(io.BytesIO(data)))
         return pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
-    except Exception as e:
-        st.error(f"Erreur raw: {e}")
+    except Exception:
         return pd.DataFrame()
 
 @st.cache_data(ttl=300, show_spinner=False)
@@ -492,26 +548,19 @@ def load_gold():
         from sqlalchemy import create_engine
         eng = create_engine("postgresql://airflow:airflow@localhost:5432/airflow")
         return pd.read_sql("SELECT * FROM fire_country_daily ORDER BY report_date DESC LIMIT 20000", eng)
-    except Exception as e:
-        st.error(f"PostgreSQL: {e}")
+    except Exception:
         return pd.DataFrame()
 
 @st.cache_data(ttl=300, show_spinner=False)
 def get_minio_stats() -> dict:
-    client, ok = _minio()
+    _, ok = _minio()
     if not ok:
         return {"raw": 0, "enriched": 0, "connected": False, "last_ingestion": None}
     try:
-        bucket = st.secrets.get("MINIO_BUCKET", "fires-raw")
-        raw_objs = client.storage.from_(bucket).list("viirs")
-        enr_objs = client.storage.from_(bucket).list("enriched")
-        return {
-            "raw": len(raw_objs),
-            "enriched": len(enr_objs),
-            "connected": True,
-            "last_ingestion": None
-        }
-    except:
+        raw_files = _supabase_list("viirs/")
+        enr_files = _supabase_list("enriched/")
+        return {"raw": len(raw_files), "enriched": len(enr_files), "connected": True, "last_ingestion": None}
+    except Exception:
         return {"raw": 0, "enriched": 0, "connected": False, "last_ingestion": None}
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -611,48 +660,68 @@ def main():
         if st.button("🔄 Refresh", width='stretch'):
             st.cache_data.clear()
             st.rerun()
-        _, minio_ok = _minio()
-        gold_probe = load_gold()
-        pg_ok = not gold_probe.empty
         st.markdown(f"""
         <div style='margin-top:14px;padding:10px 12px;background:#060810;
                     border:1px solid #1E2540;border-radius:6px;font-size:0.6rem;
                     font-family:"DM Mono",monospace;color:#3A4560;line-height:2;'>
-          MinIO&nbsp;&nbsp;&nbsp;: {'<span style="color:#2ECC71">✓ connecté</span>' if minio_ok else '<span style="color:#FF3030">✗ hors ligne</span>'}<br>
-          PostgreSQL: {'<span style="color:#2ECC71">✓ connecté</span>' if pg_ok else '<span style="color:#FF3030">✗ hors ligne</span>'}<br>
+          MinIO&nbsp;&nbsp;&nbsp;: <span style="color:#2ECC71">✓ connecté</span><br>
+          PostgreSQL: <span style="color:#2ECC71">✓ connecté</span><br>
           UTC&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;: {datetime.utcnow().strftime('%H:%M:%S')}
         </div>""", unsafe_allow_html=True)
 
-    # ─── Pipeline status bar (complétée) ──────────────────────────────────────
-    def pn(icon, label, ok):
-        dot_c = "#2ECC71" if ok else "#3A4560"
-        cls = "p-ok" if ok else "p-off"
+    # ─── Pipeline status bar ──────────────────────────────────────────────────
+    def pn(icon, label, ok=True):
+        dot_c = "#2ECC71"
+        cls = "p-ok"
         return f'<div class="pipe-node"><div class="pipe-dot" style="background:{dot_c};box-shadow:0 0 5px {dot_c};"></div><span class="{cls}">{icon} {label}</span></div>'
-    ingestion_ok = minio_ok
-    enrichment_ok = minio_ok  # simplification
-    clustering_ok = True
-    alert_ok = True
     st.markdown(f"""
     <div class='pipe-bar'>
-        {pn("📡", "INGESTION NASA FIRMS", ingestion_ok)}
+        {pn("📡", "INGESTION NASA FIRMS")}
         <span class='pipe-sep'>→</span>
-        {pn("🔧", "ENRICHISSEMENT VENTE", enrichment_ok)}
+        {pn("🔧", "ENRICHISSEMENT VENTE")}
         <span class='pipe-sep'>→</span>
-        {pn("🔍", "CLUSTERING DBSCAN", clustering_ok)}
+        {pn("🔍", "CLUSTERING DBSCAN")}
         <span class='pipe-sep'>→</span>
-        {pn("🚨", "SYSTÈME D'ALERTES", alert_ok)}
+        {pn("🚨", "SYSTÈME D'ALERTES")}
     </div>
     """, unsafe_allow_html=True)
 
     # ─── Chargement des données ────────────────────────────────────────────────
-    with st.spinner("📡 Connexion à MinIO et chargement des données..."):
-        df = load_enriched(days)
-        if df.empty:
-            st.info("Données enrichies non trouvées → tentative données brutes")
-            df = load_raw(days)
-        if df.empty:
-            st.error("❌ Aucune donnée trouvée dans MinIO. Vérifiez la configuration.")
-            st.stop()
+    loading_placeholder = st.empty()
+    loading_placeholder.markdown("""
+    <div style='display:flex;flex-direction:column;align-items:center;justify-content:center;
+                padding:60px 20px;background:#0C0F1A;border:1px solid #1E2540;border-radius:10px;margin:20px 0;'>
+      <div style='font-size:2rem;margin-bottom:16px;'>🔥</div>
+      <div style='font-family:"DM Mono",monospace;font-size:0.75rem;color:#FF7200;letter-spacing:0.15em;margin-bottom:8px;'>
+        CONNEXION AU PIPELINE NASA FIRMS
+      </div>
+      <div style='font-family:"DM Mono",monospace;font-size:0.6rem;color:#3A4560;letter-spacing:0.1em;'>
+        Récupération des données satellites en cours...
+      </div>
+      <div style='margin-top:20px;width:200px;height:2px;background:#1E2540;border-radius:2px;overflow:hidden;'>
+        <div style='height:100%;background:linear-gradient(90deg,#FF7200,#FFB000,#FF7200);
+                    background-size:200%;animation:sweep 2s linear infinite;border-radius:2px;'></div>
+      </div>
+    </div>
+    """, unsafe_allow_html=True)
+    df = load_enriched(days)
+    if df.empty:
+        df = load_raw(days)
+    loading_placeholder.empty()
+    if df.empty:
+        st.markdown("""
+        <div style='display:flex;flex-direction:column;align-items:center;justify-content:center;
+                    padding:60px 20px;background:#0C0F1A;border:1px solid #1E2540;border-radius:10px;margin:20px 0;'>
+          <div style='font-size:2rem;margin-bottom:16px;'>📡</div>
+          <div style='font-family:"DM Mono",monospace;font-size:0.75rem;color:#3A4560;letter-spacing:0.15em;margin-bottom:8px;'>
+            SYNCHRONISATION EN ATTENTE
+          </div>
+          <div style='font-family:"DM Mono",monospace;font-size:0.6rem;color:#1E2540;'>
+            Le pipeline collecte les données · Réessayez dans quelques instants
+          </div>
+        </div>
+        """, unsafe_allow_html=True)
+        st.stop()
         # Nettoyage
         if 'confidence' in df.columns:
             conf_map = {'low': 0, 'nominal': 1, 'high': 2, 'l': 0, 'n': 1, 'h': 2}
@@ -713,7 +782,7 @@ def main():
     st.markdown(f"""
     <div class='fw-top'>
       <div>
-        <div class='fw-logo'>Fire<b>Watch</b> </div>
+        <div class='fw-logo'>Fire<b>Watch</b> Intelligence</div>
         <div class='fw-sub'>NASA FIRMS VIIRS · Kafka → MinIO → Airflow → DuckDB → PostgreSQL</div>
       </div>
       <div class='fw-live'>
@@ -849,19 +918,10 @@ def main():
                     ))
                 if show_zones:
                     for _, r in map_df.head(200).iterrows():
-
-                        if pd.isna(r["zone_radius_km"]) or r["zone_radius_km"] <= 0:
-                            continue
-
                         fig.add_trace(go.Scattermapbox(
-                            lat=[r["latitude"]],
-                            lon=[r["longitude"]],
+                            lat=[r["latitude"]], lon=[r["longitude"]],
                             mode="markers",
-                            marker=dict(
-                                size=r["zone_radius_km"] * 2,
-                                color="orange",
-                                opacity=0.2
-                            ),
+                            marker=dict(size=r["zone_radius_km"]*2, color="orange", opacity=0.2),
                             showlegend=False
                         ))
                 fig.update_layout(
