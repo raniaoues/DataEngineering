@@ -708,6 +708,8 @@ def main():
     if df.empty:
         df = load_raw(days)
     loading_placeholder.empty()
+    
+    # ─── EMPTY CHECK WITH PROPER STOP ──────────────────────────────────────────
     if df.empty:
         st.markdown("""
         <div style='display:flex;flex-direction:column;align-items:center;justify-content:center;
@@ -722,34 +724,70 @@ def main():
         </div>
         """, unsafe_allow_html=True)
         st.stop()
-        # Nettoyage
-        if 'confidence' in df.columns:
-            conf_map = {'low': 0, 'nominal': 1, 'high': 2, 'l': 0, 'n': 1, 'h': 2}
-            df['confidence'] = df['confidence'].apply(lambda x: conf_map.get(str(x).lower(), 1) if pd.notna(x) else 1)
-        # Calculs métier
-        if "severity_score" not in df.columns:
-            with st.spinner("🧮 Calcul des scores de sévérité..."):
-                b = df.get("bright_ti4", df.get("brightness", 380))
-                c = df.get("confidence", 1)
-                df["severity_score"] = [severity_score(float(df["frp"].iloc[i]), float(b.iloc[i]), c.iloc[i]) for i in range(len(df))]
-        if "meteo_risk" not in df.columns and "temperature_c" in df.columns:
-            with st.spinner("🌡️ Calcul des risques météo..."):
-                df["meteo_risk"] = df.apply(lambda r: meteo_fire_risk(r.get("temperature_c",25), r.get("humidity_pct",50), r.get("windspeed_kmh",10)), axis=1)
-        if "zone_danger" not in df.columns:
-            with st.spinner("🗺️ Classification des zones de danger..."):
-                df["zone_danger"] = df.apply(lambda r: zone_danger_level(r["severity_score"], r.get("meteo_risk","FAIBLE"), bool(r.get("primary_forest",False)), bool(r.get("protected_area",False))), axis=1)
-        if "zone_radius_km" not in df.columns:
-            with st.spinner("📏 Calcul des rayons de danger..."):
-                df["zone_radius_km"] = df.apply(lambda r: danger_zone_radius(r["frp"], r.get("windspeed_kmh",0), bool(r.get("primary_forest",False))), axis=1)
-        if "risk_label" not in df.columns:
-            df["risk_label"] = df["severity_score"].apply(sev_label)
-        gold_df = load_gold()
-        mask = pd.Series([True] * len(df))
-        if "frp" in df.columns:
-            mask &= df["frp"] >= frp_min
-        df = df[mask].copy()
-        if df.empty:
-            st.warning("⚠️ Aucun hotspot ne correspond aux filtres.")
+    
+    # ─── ENRICHISSEMENT (CORRECTLY INDENTED - TOP LEVEL) ──────────────────────
+    if 'confidence' in df.columns:
+        conf_map = {'low': 0, 'nominal': 1, 'high': 2, 'l': 0, 'n': 1, 'h': 2}
+        df['confidence'] = df['confidence'].apply(
+            lambda x: conf_map.get(str(x).lower(), 1) if pd.notna(x) else 1
+        )
+    
+    if "severity_score" not in df.columns:
+        with st.spinner("🧮 Calcul des scores de sévérité..."):
+            b = df.get("bright_ti4", df.get("brightness", pd.Series([380]*len(df))))
+            c = df.get("confidence", pd.Series([1]*len(df)))
+            df["severity_score"] = [
+                severity_score(float(df["frp"].iloc[i]), float(b.iloc[i]), c.iloc[i])
+                for i in range(len(df))
+            ]
+    
+    if "meteo_risk" not in df.columns and "temperature_c" in df.columns:
+        with st.spinner("🌡️ Calcul des risques météo..."):
+            df["meteo_risk"] = df.apply(
+                lambda r: meteo_fire_risk(
+                    r.get("temperature_c", 25),
+                    r.get("humidity_pct", 50),
+                    r.get("windspeed_kmh", 10)
+                ), axis=1
+            )
+    elif "meteo_risk" not in df.columns:
+        df["meteo_risk"] = "FAIBLE"   # fallback if no meteo columns
+    
+    if "zone_danger" not in df.columns:
+        with st.spinner("🗺️ Classification des zones de danger..."):
+            df["zone_danger"] = df.apply(
+                lambda r: zone_danger_level(
+                    r["severity_score"],
+                    r.get("meteo_risk", "FAIBLE"),
+                    bool(r.get("primary_forest", False)),
+                    bool(r.get("protected_area", False))
+                ), axis=1
+            )
+    
+    if "zone_radius_km" not in df.columns:
+        with st.spinner("📏 Calcul des rayons de danger..."):
+            df["zone_radius_km"] = df.apply(
+                lambda r: danger_zone_radius(
+                    r["frp"],
+                    r.get("windspeed_kmh", 0),
+                    bool(r.get("primary_forest", False))
+                ), axis=1
+            )
+    
+    if "risk_label" not in df.columns:
+        df["risk_label"] = df["severity_score"].apply(sev_label)
+    
+    gold_df = load_gold()
+    
+    # ─── FRP FILTER ────────────────────────────────────────────────────────────
+    mask = pd.Series([True] * len(df))
+    if "frp" in df.columns:
+        mask &= df["frp"] >= frp_min
+    df = df[mask].copy()
+    
+    if df.empty:
+        st.warning("⚠️ Aucun hotspot ne correspond aux filtres.")
+        st.stop()
 
     # ─── ALERTES CRITIQUES (détection + affichage) ────────────────────────────
     alert_manager = st.session_state.alert_manager
