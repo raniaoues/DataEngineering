@@ -777,14 +777,6 @@ def main():
     if "risk_label" not in df.columns:
         df["risk_label"] = df["severity_score"].apply(sev_label)
     
-    # ─── FILTER OUT ROWS WITH NaN IN COUNTRY ───────────────────────────────────
-    if "country" in df.columns:
-        before_count = len(df)
-        df = df[df["country"].notna()].copy()
-        after_count = len(df)
-        if before_count > after_count:
-            st.info(f"🗺️ Filtré {before_count - after_count} hotspots sans pays")
-    
     gold_df = load_gold()
     
     # ─── FRP FILTER ────────────────────────────────────────────────────────────
