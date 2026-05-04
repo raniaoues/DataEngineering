@@ -924,6 +924,7 @@ def main():
         </div>""", unsafe_allow_html=True)
 
     # ──────────────────────────────────────────────────────────────────────────
+        # ──────────────────────────────────────────────────────────────────────────
     # VUE 2 - Carte interactive
     with vue2:
         st.markdown("🌍 **Visualisation géographique**")
@@ -955,13 +956,17 @@ def main():
                         name="Clusters"
                     ))
                 if show_zones:
-                    for _, r in map_df.head(200).iterrows():
-                        fig.add_trace(go.Scattermapbox(
-                            lat=[r["latitude"]], lon=[r["longitude"]],
-                            mode="markers",
-                            marker=dict(size=r["zone_radius_km"]*2, color="orange", opacity=0.2),
-                            showlegend=False
-                        ))
+                    # Filter out rows with invalid zone_radius_km
+                    zone_df = map_df[map_df["zone_radius_km"].notna() & (map_df["zone_radius_km"] > 0)].head(200)
+                    for _, r in zone_df.iterrows():
+                        radius_val = float(r["zone_radius_km"])
+                        if pd.notna(radius_val) and radius_val > 0:
+                            fig.add_trace(go.Scattermapbox(
+                                lat=[r["latitude"]], lon=[r["longitude"]],
+                                mode="markers",
+                                marker=dict(size=min(radius_val * 2, 50), color="orange", opacity=0.2),
+                                showlegend=False
+                            ))
                 fig.update_layout(
                     mapbox_style="carto-darkmatter", mapbox_zoom=2, mapbox_center={"lat":20,"lon":0},
                     margin={"r":0,"t":0,"l":0,"b":0}, height=600
